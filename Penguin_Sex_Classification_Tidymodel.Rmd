@@ -1,0 +1,386 @@
+---
+title: "Classification: Tidy models"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+
+
+```{r setup, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = TRUE, warning = FALSE,
+                      message = FALSE, dpi = 180,
+                      fig.width = 8, fig.height = 5)
+
+setwd(getwd())  # setting the working directory
+```
+
+
+
+```{r Libraries, echo = FALSE}
+
+library(tidyverse)
+library(tidymodels)
+library(DT)
+library(kableExtra)
+library(silgelib)
+library(ranger)
+library(ggplot2)
+library(palmerpenguins)
+
+# theme_set(theme_plex())
+```
+
+
+```{r Importing Dataset, echo = FALSE}
+
+# data(package = "palmerpenguins")
+
+```
+
+
+# Introduction
+
+This model will classify sex across three species of penguins. Can we predict sex of the penguin based on some of the physical characteristics?
+
+
+## Explore Data
+
+```{r Data table, echo = FALSE}
+
+# # typeof(data)
+# # coerce list to dataframe
+# data <- as.data.frame(palmerpenguins)
+# 
+# data %>% 
+#   kbl(caption = "Palmer Penguins Dataset") %>% 
+#   kable_styling()
+
+```
+
+
+
+```{r View Data, echo = FALSE}
+datatable(penguins)
+
+```
+
+
+```{r  Filter Data, echo = FALSE}
+penguins %>% 
+  filter(!is.na(sex)) %>% 
+  ggplot(aes(flipper_length_mm, bill_length_mm, color = sex, size = body_mass_g)) + 
+  geom_point(alpha = 0.7)+
+  facet_wrap(~species)
+
+```
+
+```{r Select Data for Model, echo = FALSE}
+
+# the data we'll use to build the model
+# year and island are removed as not predictors of sex
+
+penguins_df <- penguins %>% 
+  filter(!is.na(sex)) %>% 
+  select(-year, -island)
+
+```
+
+
+## Splitting the Data
+
+The data is split into two partitions. :
+
+The training set is used to estimate parameters, compare models and feature engineer.
+ 
+The test set is held in reserve until the end of the project, at which point there should only be one or two models under serious consideration. It is used as an unbiased source for measuring final model performance.
+
+There are different ways to create these partitions of the data. The most common approach is to use a random sample.  Random sampling will randomly select 25% for the test set and use the remainder for the training set. 
+
+Random number seed is set to ensure data replication at a later date. 
+
+```{r Data Split, echo = FALSE}
+
+library(tidymodels)
+
+# split data into testing and training
+set.seed(123)
+
+# initial_split() function performs the split
+# can set strata to stratify a variable, in this case equal proportion of male and female per set
+penguin_split <- initial_split(penguins_df, strata = sex)
+
+# to get the data out, use the training function, which we apply to the split
+penguin_train <- training(penguin_split)
+penguin_test <- testing(penguin_split)
+
+```
+
+#### Split assigns observations to either the test or train set
+     It just keeps track of which observations go into which set
+
+#### 
+  Penguin train is now a dataframe, with 250 out of 344
+  
+  Test set is smaller. Default for initial split is a 3/4 : 1/4 split
+
+
+The data set is small for comparing models and attempting to tune models. 
+
+Can't use test set to compare models because ** The test set is for estimating performance of the final model.**
+
+
+So create resampled datasets using the training set. That is what will be used for computing performance for models we will train. 
+
+## Bootstrapping Statistics
+
+Many things can affect how well a sample reflects the population; and therefore how reliable the conclusions will be. 
+
+Bootstrapping is a statistical procedure that resamples a single dataset to create many simulated samples. This process allows for the calculation of standard errors, confidence intervals, and hypothesis testing” (Forst). 
+
+The traditional approach (or large sample approach) draws one sample of size n from the population, and that sample is used to calculate population estimates to then make inferences on. But only one sample has been observed. 
+
+However, there is the idea of a sampling distribution, which is a theoretical set of all possible estimates if the population were to be resampled. The theory states that, under certain conditions such as large sample sizes, the sampling distribution will be approximately normal, and the standard deviation of the distribution will be equal to the standard error. But what happens if the sample size is not sufficiently large? Then, it cannot necessarily be assumed that the theoretical sampling distribution is normal. This then makes it difficult to determine the standard error of the estimate, and harder to draw reasonable conclusions from the data.
+
+Results derived from the bootstrapping approach are basically identical to those of the traditional approach. Additionally, the bootstrapping approach will always work because it does not assume any underlying distribution of the data. This contrasts with the traditional approach which theoretically assumes that the data are normally distributed. 
+
+“The advantages of bootstrapping are that it is a straightforward way to derive the estimates of standard errors and confidence intervals, and it is convenient since it avoids the cost of repeating the experiment to get other groups of sampled data. Although it is impossible to know the true confidence interval for most problems, bootstrapping is asymptotically consistent and more accurate than using the standard intervals obtained using sample variance and the assumption of normality” (Cline).
+
+
+Both approaches require the use of appropriately drawn samples to make inferences about populations. However, the most major difference between these two methods is the mechanics behind estimating the sampling distribution. The traditional procedure requires one to have a test statistic that satisfies particular assumptions in order to achieve valid results, and this is largely dependent on the experimental design. The traditional approach also uses theory to tell what the sampling distribution should look like, but the results fall apart if the assumptions of the theory are not met. The bootstrapping method, on the other hand, takes the original sample data and then resamples it to create many [simulated] samples. This approach does not rely on the theory since the sampling distribution can simply be observed, and one does not have to worry about any assumptions. This technique allows for accurate estimates of statistics, which is crucial when using data to make decisions.
+
+```{r Resample/ Bootstrapping, echo = FALSE}
+
+set.seed(234)
+penguin_boot <- bootstraps(penguin_train)
+
+# bootstrap resamples are resamples with replacement.
+# you get to the same size data as we started with more sample sets for testing 
+
+
+```
+
+## Build a model
+
+```{r Specifying Models,   echo = FALSE}
+
+# Logistic_Regression 
+glm_spec <- logistic_reg() %>% 
+  set_engine("glm")# could set for Bayesian model either
+
+# This is a model specification. 
+# What kind of model am I going to train? Haven't trained the model yet
+# setting up the kind of model we will train
+
+# Could set for regularised regression by setting engine("glmnet")
+
+
+# Random Forest 
+rf_spec <- rand_forest() %>% 
+  set_mode("classification") %>%  # can be used for regression either so need to specify
+  set_engine("ranger")  # ranger package: a fast implementation of random forests, 
+                        #                 particularly suited to high dimensional data
+
+```
+
+
+#### Logistic Regression: 
+
+The logistic regression model is an example of a broad class of models known as generalized linear models (GLM). For example, GLMs also include linear regression, ANOVA, poisson regression, etc.
+
+Random forests are based on a simple idea: ‘the wisdom of the crowd’. Aggregate of the results of multiple predictors gives a better prediction than the best individual predictor. A group of predictors is called an ensemble. Thus, this technique is called Ensemble Learning.
+
+We can train a group of Decision Tree classifiers, each on a different random subset of the train set. To make a prediction, we just obtain the predictions of all individuals trees, then predict the class that gets the most votes. This technique is called Random Forest.
+
+
+#### Random Forest: A tree based model
+
+Nice because they perform well with their defaults. Won't worry about tuning the hyperparamters
+Random Forests can be used either for classification or for regression. 
+
+So two models to try out on predicting sex of penguins. 
+We have data, and model specifications. 
+
+```{r workflow, echo = FALSE}
+
+# workflow() is a way to put pieces of models together like lego
+# needs a preprocessor and a model. 
+# We'll use a formula as preprocessor
+
+penguin_wf <- workflow() %>% 
+  add_formula(sex ~ .)# We're going to predict sex using everything else (hence ~)
+
+penguin_wf # no model added yet: see console output
+
+```
+Random forest is able to learn interactions, e.g. if for dif species of penguin dif physcial characteristics are important, the random forest will be able to learn that. 
+
+The logistic regression is just a very simple linear model. 
+
+```{r Modeling, echo = FALSE}
+
+# # Fitting logistic regression model
+# penguin_wf %>% 
+#   add_model(glm_spec) %>% # specify the model
+#   fit(data = penguin_train) # fit to the data.
+# 
+# # This is a very simple straight up fit the model to the data, but we don't want to fit one time, 
+# # we want to fit to the resamples because want to be able to compare both models and have a more # # robust estimate for the performance. 
+
+glm_results <-  penguin_wf %>% 
+   add_model(glm_spec) %>% # specify the model: logistic regression created earlier
+   fit_resamples(
+     resamples = penguin_boot, # fit the model to the resamples
+     control = control_resamples(save_pred = TRUE, verbose = TRUE) # verbose set true to log/watch
+     ) 
+
+
+# Random forest model
+rf_results <- penguin_wf %>% 
+   add_model(rf_spec) %>% # specify the model: random forest created earlier
+   fit_resamples(
+     resamples = penguin_boot, # fit the model to the resamples
+     control = control_resamples(save_pred = TRUE, verbose = TRUE) # verbose set true to log/watch
+     ) 
+
+```
+
+We want to fit to the resamples because want to be able to compare the logistic regression model and the random forest model. We want to have a more robust estimate of the performance. Want to be able to compute performance metrics for the two models. 
+
+## Evaluate modeling
+
+We have trained two models. Now to look at the performance of each. 
+
+```{r LogReg Model Results, echo = FALSE}
+
+# Logistic Regression model results
+collect_metrics(glm_results)
+
+
+```
+
+
+Random Forest more computationally expensive so a bit slower. 
+```{r RanForest Model Results, echo = FALSE}
+
+# Random Forest model results
+collect_metrics(rf_results)
+
+```
+
+If both models perform relatively similarly and you had to choose, we'd choose the linear model because linear models are easy to interpret, fast to implement, easy to deploy etc. 
+
+So we will choose the linear model to move forward. It's possible with more data we could tease more out but for now this is what we have. 
+
+```{r Confusion Matrix, echo = FALSE}
+# Examine some of the results we got from the linear model. 
+
+conf_matrix <- glm_results %>% 
+  conf_mat_resampled() # confusion matrix
+
+# to read the tidymodels version of conf matrix output:
+# first and last rows are correct predictions, 
+# middle two rows are incorrect predictions
+
+datatable(conf_matrix)
+
+```
+To examine some of the results from the linear model further we can look at the confusion matrix for this model. 
+
+The confusion matrix shows number of true predictions in first and last rows, false predictions in middle two rows. 
+
+Similar balancing across classes true/false predictions, i.e. don't have a problem predicting one class over the other. 
+
+ROC - area under the curve
+```{r ROC, echo = FALSE}
+
+# To look at the area under the curve 
+glm_results %>% 
+  collect_predictions() %>% 
+  group_by(id) %>% 
+  roc_curve(sex, .pred_female) %>% 
+  ggplot(aes(1 - specificity, sensitivity, color = id))+
+  geom_abline(lty = 2, color = "gray80", size = 1.5)+
+  geom_path(show.legend = FALSE, alpha = 0.6, size = 1.2)
+
+
+```
+
+
+
+This gives us an understanding of what the variation is for the ROC for resample to resample. 
+
+
+
+
+## Testing Data
+
+Return to the testing data to estimate the model performance. 
+We use the last_fit function, fitting the final best model to the training set and evaluates on the test set. 
+
+```{r Test Set Eval, echo = FALSE}
+
+# training for last time, previous time we trained a lot of times on the resamples
+# this time we train once, fitting to the training, evaluating on the test data. 
+penguin_final <- penguin_wf %>% 
+  add_model(glm_spec) %>% 
+  last_fit(penguin_split) # specify split, so it will fit to the training data + evaluate on the test data
+
+collect_metrics(penguin_final)# metrics computed on the testing data
+
+
+```
+```{r}
+
+collect_predictions(penguin_final)
+# we see in table our predictions and actual value
+# 
+
+```
+
+
+Confusion Matrix helps us understand how the model is performing on test data for the two classes. 
+No big changes, good. 
+
+```{r finalConf Matrix, echo = FALSE}
+
+fcf <- collect_predictions(penguin_final) %>% 
+  conf_mat(sex, .pred_class)
+
+fcf
+```
+ 
+```{r fitted Workflow, echo = FALSE}
+
+# enter this in console to get workflow output: i.e. the preprocessor and model used, 
+# the coefficients, degrees of freedom etc. 
+penguin_final$.workflow[[1]] %>% 
+  tidy(exponentiate = TRUE) %>%  # coefficients are now exponentiated, meaning they are odds ratios. 
+  arrange(estimate)                            
+
+
+```
+
+e.g. for every 1 milimetre increase in bill_depth corresponds to an almost 8 times (estimate 8.36277e)  higher odds in being male. So bill_depth is very important for predicting maleness. 
+
+flipper_length: p-value is quite big so this not so important for sex
+
+For every 1gram increase in body_mass there is a 1 times odds increase in being male...
+this is how the odds ratios work. 
+
+Switch out flipper_length for bill_depth in original exploratory graph
+
+We see a greater separation of male and female according to these physical attributes!
+
+```{r}
+
+penguins %>% 
+  filter(!is.na(sex)) %>% 
+  ggplot(aes(bill_depth_mm, bill_length_mm, color = sex, size = body_mass_g)) + 
+  geom_point(alpha = 0.7)+
+  facet_wrap(~species)
+
+```
+
